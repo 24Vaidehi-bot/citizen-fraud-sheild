@@ -3,6 +3,7 @@
 import logging
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.core.exceptions import FraudShieldError
@@ -128,12 +129,31 @@ async def upload_screenshot(
             exc.status_code,
             exc.message,
         )
+        try:
+            db.rollback()
+        except Exception:
+            pass
         raise HTTPException(
             status_code=exc.status_code,
             detail=exc.message,
         ) from exc
 
+    except SQLAlchemyError as exc:
+        logger.exception("Database error occurred during screenshot upload processing.")
+        try:
+            db.rollback()
+        except Exception:
+            logger.exception("Failed to rollback database transaction.")
+        raise HTTPException(
+            status_code=500,
+            detail="Database transaction failed. The operation was rolled back.",
+        ) from exc
+
     except HTTPException:
+        try:
+            db.rollback()
+        except Exception:
+            pass
         raise
 
     except Exception as exc:
@@ -141,6 +161,10 @@ async def upload_screenshot(
             "Unhandled server exception during screenshot processing | filename=%s",
             file.filename if file else "unknown",
         )
+        try:
+            db.rollback()
+        except Exception:
+            pass
         raise HTTPException(
             status_code=500,
             detail=f"Screenshot processing failed: {str(exc)}",

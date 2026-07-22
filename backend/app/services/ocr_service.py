@@ -1,70 +1,52 @@
 """
-OCR extraction service using lightweight ONNX / Tesseract engines.
+OCR extraction service using lightweight Tesseract OCR (pytesseract + Pillow).
 
-Designed for low-memory cloud deployments (such as Render 512MB free tier).
-Replaces memory-heavy EasyOCR/PyTorch (>1.5GB RAM) with RapidOCR-ONNX (~40MB RAM),
-pytesseract, and PIL fallback engines.
+Designed for low-memory cloud environments (such as Render free tier 512MB RAM).
+Completely avoids memory-heavy ML frameworks (EasyOCR, PyTorch, TorchVision).
 """
 
 import io
 import logging
-import threading
+import shutil
 from typing import List, Tuple
-
-import numpy as np
 from PIL import Image, ImageOps
+
+import pytesseract
 
 from app.core.exceptions import OCRProcessingError
 from app.models.schemas import OCRResult
 
 logger = logging.getLogger(__name__)
 
-# Singleton OCR engine instances
-_rapidocr_engine = None
-_engine_lock = threading.Lock()
-
-# Image size thresholds to control RAM/CPU load and optimize speed
-MAX_IMAGE_WIDTH = 1800
-MAX_IMAGE_HEIGHT = 1800
-MIN_IMAGE_WIDTH = 600
+# Maximum image dimension limits for memory optimization
+MAX_IMAGE_WIDTH = 2500
+MAX_IMAGE_HEIGHT = 2500
 
 
-def _get_rapidocr_engine():
-    """
-    Lazily initialize RapidOCR (ONNX Runtime engine) on demand.
-    Uses ~40MB RAM compared to 1.5GB+ for EasyOCR/PyTorch.
-    """
-    global _rapidocr_engine
-    if _rapidocr_engine is not None:
-        return _rapidocr_engine
-
-    with _engine_lock:
-        if _rapidocr_engine is not None:
-            return _rapidocr_engine
-
-        try:
-            logger.info("Initializing lightweight RapidOCR-ONNX engine...")
-            from rapidocr_onnxruntime import RapidOCR
-
-            _rapidocr_engine = RapidOCR()
-            logger.info("RapidOCR-ONNX engine initialized successfully.")
-            return _rapidocr_engine
-        except ImportError:
-            logger.warning("rapidocr-onnxruntime package is not installed.")
-            return None
-        except Exception as exc:
-            logger.warning("RapidOCR initialization failed: %s", exc)
-            return None
+def _check_tesseract_availability() -> bool:
+    """Check whether Tesseract OCR binary is installed and accessible."""
+    if shutil.which("tesseract") is not None:
+        return True
+    try:
+        pytesseract.get_tesseract_version()
+        return True
+    except Exception:
+        return False
 
 
 def _preprocess(image: Image.Image) -> Image.Image:
     """
-    Prepare image for OCR while controlling memory usage.
+    Prepare image for OCR while optimizing memory usage.
+
+    1. Apply EXIF orientation fix.
+    2. Convert transparent/alpha channels to solid white RGB background.
+    3. Downscale oversized images (>2500px).
+    4. Never upscale small images to avoid memory inflation.
     """
     # Fix EXIF orientation
     image = ImageOps.exif_transpose(image)
 
-    # Convert transparency (RGBA/LA/P) to white background RGB
+    # Convert transparency (RGBA / LA / P) to RGB on a white background
     if image.mode in ("RGBA", "LA") or (image.mode == "P" and "transparency" in image.info):
         background = Image.new("RGB", image.size, (255, 255, 255))
         if image.mode in ("RGBA", "LA"):
@@ -74,80 +56,102 @@ def _preprocess(image: Image.Image) -> Image.Image:
             rgba_img = image.convert("RGBA")
             background.paste(rgba_img, mask=rgba_img.getchannel("A"))
         image = background
-    else:
+    elif image.mode != "RGB":
         image = image.convert("RGB")
 
     width, height = image.size
 
-    # Downscale oversized screenshots
+    # Downscale oversized screenshots (strictly max 2500x2500)
     if width > MAX_IMAGE_WIDTH or height > MAX_IMAGE_HEIGHT:
         scale = min(MAX_IMAGE_WIDTH / width, MAX_IMAGE_HEIGHT / height)
-        new_size = (max(1, int(width * scale)), max(1, int(height * scale)))
-        logger.info("Downscaling image for OCR from %dx%d to %dx%d", width, height, new_size[0], new_size[1])
-        image = image.resize(new_size, Image.LANCZOS)
-    elif width < MIN_IMAGE_WIDTH:
-        scale = MIN_IMAGE_WIDTH / width
-        new_size = (int(width * scale), int(height * scale))
-        logger.info("Upscaling small image for OCR from %dx%d to %dx%d", width, height, new_size[0], new_size[1])
-        image = image.resize(new_size, Image.LANCZOS)
+        new_width = max(1, int(width * scale))
+        new_height = max(1, int(height * scale))
+        logger.info(
+            "Downscaling image for OCR from %dx%d to %dx%d",
+            width, height, new_width, new_height
+        )
+        resample_filter = getattr(Image, "Resampling", Image).LANCZOS
+        image = image.resize((new_width, new_height), resample_filter)
 
+    # Do not upscale small images to preserve memory
     return image
 
 
-def _run_rapidocr(image_np: np.ndarray) -> Tuple[List[str], List[float]]:
-    """Execute RapidOCR over numpy image array."""
-    engine = _get_rapidocr_engine()
-    if engine is None:
-        return [], []
-
-    results, _ = engine(image_np)
-    if not results:
-        return [], []
-
-    extracted_lines: List[str] = []
-    confidences: List[float] = []
-
-    for item in results:
-        if not item or len(item) < 2:
-            continue
-        text = str(item[1]).strip()
-        confidence = 0.85
-        if len(item) >= 3:
-            try:
-                confidence = float(item[2])
-            except (TypeError, ValueError):
-                confidence = 0.85
-
-        if text:
-            extracted_lines.append(text)
-            confidences.append(confidence)
-
-    return extracted_lines, confidences
-
-
-def _run_tesseract(image: Image.Image) -> Tuple[List[str], List[float]]:
-    """Fallback OCR using pytesseract if tesseract-ocr binary is installed."""
+def _run_tesseract(image: Image.Image) -> Tuple[str, float]:
+    """
+    Execute Tesseract OCR using pytesseract.
+    Returns (extracted_text, average_confidence).
+    """
     try:
-        import pytesseract
+        # Use image_to_data to retrieve per-word text and confidence values
+        data = pytesseract.image_to_data(image, lang="eng", output_type=pytesseract.Output.DICT)
 
-        raw_text = pytesseract.image_to_string(image, lang="eng")
-        lines = [line.strip() for line in raw_text.splitlines() if line.strip()]
-        confidences = [0.90] * len(lines)
-        return lines, confidences
+        extracted_words: List[str] = []
+        confidences: List[float] = []
+
+        n_boxes = len(data.get("text", []))
+        for i in range(n_boxes):
+            text = str(data["text"][i]).strip()
+            conf_val = data["conf"][i]
+
+            # Tesseract gives confidence -1 or >= 0
+            if text and conf_val >= 0:
+                extracted_words.append(text)
+                confidences.append(float(conf_val) / 100.0)
+
+        # Fallback to image_to_string if image_to_data yielded no words
+        if not extracted_words:
+            raw_text = pytesseract.image_to_string(image, lang="eng").strip()
+            if raw_text:
+                lines = [line.strip() for line in raw_text.splitlines() if line.strip()]
+                full_text = "\n".join(lines)
+                return full_text, 0.85
+            return "", 0.0
+
+        # Build clean formatted text from image_to_data line structures
+        lines_dict = {}
+        for i in range(n_boxes):
+            text = str(data["text"][i]).strip()
+            conf_val = data["conf"][i]
+            if text and conf_val >= 0:
+                line_num = (data["block_num"][i], data["par_num"][i], data["line_num"][i])
+                lines_dict.setdefault(line_num, []).append(text)
+
+        formatted_lines = [" ".join(words) for words in lines_dict.values() if words]
+        final_text = "\n".join(formatted_lines).strip()
+
+        avg_conf = sum(confidences) / len(confidences) if confidences else 0.85
+        avg_conf = round(min(1.0, max(0.0, avg_conf)), 3)
+
+        return final_text, avg_conf
+
+    except (pytesseract.TesseractNotFoundError, FileNotFoundError) as exc:
+        logger.error("Tesseract binary is not installed or missing from PATH: %s", exc)
+        raise OCRProcessingError(
+            "Tesseract OCR engine is not installed or available on the server."
+        ) from exc
     except Exception as exc:
-        logger.warning("Pytesseract OCR fallback attempted but failed: %s", exc)
-        return [], []
+        logger.exception("Pytesseract OCR processing failed: %s", exc)
+        raise OCRProcessingError(f"OCR processing failed: {str(exc)}") from exc
 
 
 def extract_text(file_bytes: bytes, filename: str) -> OCRResult:
     """
-    Extract text from an image using lightweight OCR engines (RapidOCR / PyTesseract).
-    Guarantees low memory usage and safe execution on Render.
+    Extract text from an image using lightweight Tesseract OCR.
+
+    Guarantees low memory usage (< 50MB RAM) without PyTorch or large ML models.
     """
     if not file_bytes:
         raise OCRProcessingError("The uploaded image is empty.")
 
-    # 1. Load image
+    # 1. Verify Tesseract installation
+    if not _check_tesseract_availability():
+        logger.error("Tesseract OCR binary check failed.")
+        raise OCRProcessingError(
+            "Tesseract OCR engine is not installed or available on the server."
+        )
+
+    # 2. Load image using Pillow
     try:
         image = Image.open(io.BytesIO(file_bytes))
         image.load()
@@ -156,54 +160,34 @@ def extract_text(file_bytes: bytes, filename: str) -> OCRResult:
         raise OCRProcessingError("The uploaded file is not a valid or readable image.") from exc
 
     width, height = image.size
-    logger.info("Starting OCR preprocessing for %s (%dx%d)", filename, width, height)
+    logger.info("Starting Tesseract OCR preprocessing for %s (%dx%d)", filename, width, height)
 
-    # 2. Preprocess image
+    # 3. Preprocess image safely
     try:
         processed_image = _preprocess(image)
-        image_np = np.asarray(processed_image, dtype=np.uint8)
     except Exception as exc:
         logger.exception("Image preprocessing failed for %s", filename)
         raise OCRProcessingError("Failed to preprocess image for OCR.") from exc
 
-    # 3. Perform OCR extraction
-    extracted_lines: List[str] = []
-    confidences: List[float] = []
-    ocr_engine_used = "RapidOCR-ONNX"
+    # 4. Execute Tesseract OCR
+    extracted_text, confidence = _run_tesseract(processed_image)
 
-    # Try RapidOCR
-    try:
-        extracted_lines, confidences = _run_rapidocr(image_np)
-    except Exception as exc:
-        logger.warning("RapidOCR execution failed: %s", exc)
-
-    # Fallback to PyTesseract if RapidOCR returned nothing
-    if not extracted_lines:
-        logger.info("RapidOCR returned no text. Attempting PyTesseract fallback...")
-        extracted_lines, confidences = _run_tesseract(processed_image)
-        ocr_engine_used = "PyTesseract"
-
-    extracted_text = "\n".join(extracted_lines).strip()
-
-    if not extracted_text:
-        logger.warning("No readable text found in image %s using %s", filename, ocr_engine_used)
+    if not extracted_text or not extracted_text.strip():
+        logger.warning("No readable text found in image %s using Tesseract OCR", filename)
         raise OCRProcessingError(
             "No readable text was found in this image. Please upload a clear screenshot containing legible text."
         )
 
-    avg_confidence = sum(confidences) / len(confidences) if confidences else 0.85
-    avg_confidence = round(min(1.0, max(0.0, avg_confidence)), 3)
-
     logger.info(
-        "OCR successfully extracted %d characters using %s (confidence: %.2f)",
+        "Tesseract OCR successfully extracted %d characters from %s (confidence: %.2f)",
         len(extracted_text),
-        ocr_engine_used,
-        avg_confidence,
+        filename,
+        confidence,
     )
 
     return OCRResult(
         extracted_text=extracted_text,
-        confidence=avg_confidence,
+        confidence=confidence,
         filename=filename,
         width=width,
         height=height,

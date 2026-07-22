@@ -22,7 +22,7 @@ class Settings(BaseSettings):
     upload_dir: str = "uploads"
     database_url: str = "sqlite:///./storage/fraud_shield.db"
 
-    max_upload_mb: int = 8
+    max_upload_mb: int = 5
 
     @property
     def cors_origin_list(self) -> List[str]:

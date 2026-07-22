@@ -11,8 +11,8 @@ settings = get_settings()
 
 ALLOWED_CONTENT_TYPES = {"image/png", "image/jpeg", "image/jpg", "image/webp"}
 ALLOWED_PIL_FORMATS = {"PNG", "JPEG", "MPO", "WEBP"}
-MAX_DIMENSION = 5000  # pixels
-MAX_PIXELS = 25_000_000  # 25MP
+MAX_DIMENSION = 2500  # pixels (width and height limit)
+MAX_PIXELS = 6_250_000  # 2500x2500
 
 
 def _sniff_content_type(file_bytes: bytes) -> str | None:
