@@ -17,7 +17,7 @@ class Settings(BaseSettings):
     debug: bool = True
     api_prefix: str = "/api"
 
-    cors_origins: str = "http://localhost:5173,http://localhost:3000"
+    cors_origins: str = "http://localhost:5173,http://localhost:3000,https://citizen-fraud-shield.vercel.app,https://citizen-fraud-sheild.vercel.app"
 
     upload_dir: str = "uploads"
     database_url: str = "sqlite:///./storage/fraud_shield.db"
@@ -26,7 +26,10 @@ class Settings(BaseSettings):
 
     @property
     def cors_origin_list(self) -> List[str]:
+        if not self.cors_origins or self.cors_origins.strip() == "*":
+            return ["*"]
         return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]
+
 
     @property
     def upload_path(self) -> Path:

@@ -48,6 +48,17 @@ def handle_fraud_shield_error(request: Request, exc: FraudShieldError) -> JSONRe
     return JSONResponse(status_code=exc.status_code, content={"detail": exc.message})
 
 
+@app.exception_handler(Exception)
+def handle_general_exception(request: Request, exc: Exception) -> JSONResponse:
+    import logging
+    logging.getLogger("app.main").exception("Unhandled application exception: %s", exc)
+    return JSONResponse(
+        status_code=500,
+        content={"detail": f"Internal Server Error: {str(exc)}"}
+    )
+
+
+
 app.include_router(api_router, prefix=settings.api_prefix)
 
 # Serve uploaded screenshots (e.g. for admin/debug review) as static files.
