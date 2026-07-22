@@ -7,8 +7,9 @@ Completely avoids memory-heavy ML frameworks (EasyOCR, PyTorch, TorchVision).
 
 import io
 import logging
+import os
 import shutil
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 from PIL import Image, ImageOps
 
 import pytesseract
@@ -23,9 +24,40 @@ MAX_IMAGE_WIDTH = 2500
 MAX_IMAGE_HEIGHT = 2500
 
 
+def _get_tesseract_cmd() -> Optional[str]:
+    """Find tesseract executable across PATH and standard system directories."""
+    try:
+        current_cmd = getattr(pytesseract.pytesseract, "tesseract_cmd", "tesseract")
+        if current_cmd and shutil.which(current_cmd):
+            return current_cmd
+    except Exception:
+        pass
+
+    candidates = [
+        os.environ.get("TESSERACT_CMD"),
+        shutil.which("tesseract"),
+        "/usr/bin/tesseract",
+        "/usr/local/bin/tesseract",
+        "/usr/bin/tesseract-ocr",
+        "/app/.apt/usr/bin/tesseract",
+        os.path.expanduser("~/.apt/usr/bin/tesseract"),
+        r"C:\Program Files\Tesseract-OCR\tesseract.exe",
+        r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe",
+    ]
+
+    for candidate in candidates:
+        if candidate and os.path.exists(candidate) and os.access(candidate, os.X_OK):
+            pytesseract.pytesseract.tesseract_cmd = candidate
+            logger.info("Configured Tesseract binary path: %s", candidate)
+            return candidate
+
+    return None
+
+
 def _check_tesseract_availability() -> bool:
     """Check whether Tesseract OCR binary is installed and accessible."""
-    if shutil.which("tesseract") is not None:
+    cmd = _get_tesseract_cmd()
+    if cmd is not None:
         return True
     try:
         pytesseract.get_tesseract_version()
@@ -82,6 +114,9 @@ def _run_tesseract(image: Image.Image) -> Tuple[str, float]:
     Execute Tesseract OCR using pytesseract.
     Returns (extracted_text, average_confidence).
     """
+    # Ensure tesseract_cmd is set if available in non-standard paths
+    _get_tesseract_cmd()
+
     try:
         # Use image_to_data to retrieve per-word text and confidence values
         data = pytesseract.image_to_data(image, lang="eng", output_type=pytesseract.Output.DICT)
