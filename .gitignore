@@ -1,0 +1,58 @@
+# Dependencies
+node_modules/
+**/node_modules/
+
+# Build & Output
+dist/
+**/dist/
+.vite/
+**/.vite/
+build/
+**/build/
+*.egg-info/
+
+# Python Virtual Environments
+venv/
+**/venv/
+.venv/
+**/.venv/
+ENV/
+env/
+
+# Python Byte-compiled / Cache files
+__pycache__/
+**/__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.py[cod]
+*$py.class
+*.so
+
+# Test & Coverage artifacts
+.pytest_cache/
+**/.pytest_cache/
+.coverage
+htmlcov/
+.cache/
+
+# Storage & Uploads
+uploads/
+**/uploads/
+storage/*.db
+**/storage/*.db
+
+# Environment & Secret Files
+.env
+.env.*
+!.env.example
+!**/.env.example
+
+# OS & Editor Temporary Files
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+.idea/
+.vscode/
+*.code-workspace
