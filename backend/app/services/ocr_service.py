@@ -1,6 +1,7 @@
 """
 OCR extraction service using lightweight Tesseract OCR (pytesseract + Pillow).
 
+Supports both English and Hindi text extraction with automatic fallback.
 Designed for low-memory cloud environments (such as Render free tier 512MB RAM).
 Completely avoids memory-heavy ML frameworks (EasyOCR, PyTorch, TorchVision).
 """
@@ -14,16 +15,6 @@ from typing import List, Tuple
 from PIL import Image, ImageOps
 
 import pytesseract
-
-from app.core.exceptions import OCRProcessingError
-from app.models.schemas import OCRResult
-
-logger = logging.getLogger(__name__)
-
-# Maximum image dimension limits for memory optimization
-MAX_IMAGE_WIDTH = 2500
-MAX_IMAGE_HEIGHT = 2500
-
 
 from app.core.exceptions import OCRProcessingError
 from app.models.schemas import OCRResult
@@ -68,6 +59,15 @@ def _check_tesseract_availability() -> bool:
         return False
 
 
+def _get_available_languages() -> List[str]:
+    """Return a list of language codes installed in Tesseract."""
+    try:
+        return pytesseract.get_languages()
+    except Exception as exc:
+        logger.warning("Failed to retrieve Tesseract installed languages: %s", exc)
+        return ["eng"]
+
+
 def _preprocess(image: Image.Image) -> Image.Image:
     """
     Prepare image for OCR while optimizing memory usage.
@@ -107,58 +107,70 @@ def _preprocess(image: Image.Image) -> Image.Image:
         resample_filter = getattr(Image, "Resampling", Image).LANCZOS
         image = image.resize((new_width, new_height), resample_filter)
 
-    # Do not upscale small images to preserve memory
     return image
 
 
-def _run_tesseract(image: Image.Image) -> Tuple[str, float]:
+def _run_tesseract(image: Image.Image) -> Tuple[str, float, str, str]:
     """
-    Execute Tesseract OCR strictly with English language model ('eng').
-    Returns (extracted_text, average_confidence).
+    Execute Tesseract OCR supporting both English and Hindi ('eng+hin') with fallback to 'eng'.
+    Returns (extracted_text, average_confidence, detected_language_code, detected_language_name).
     """
+    avail_langs = _get_available_languages()
+    lang_spec = "eng+hin" if "hin" in avail_langs else "eng"
+
+    raw_string_text = ""
+    used_lang = lang_spec
+
     try:
-        # 1. Primary extraction using image_to_string for optimal reading layout
-        raw_string_text = pytesseract.image_to_string(image, lang="eng").strip()
-
-        # 2. Get bounding box / confidence data via image_to_data
-        confidences: List[float] = []
-        try:
-            data = pytesseract.image_to_data(image, lang="eng", output_type=pytesseract.Output.DICT)
-            n_boxes = len(data.get("text", []))
-            for i in range(n_boxes):
-                text_word = str(data["text"][i]).strip()
-                conf_val = data["conf"][i]
-                if text_word and conf_val > 0:
-                    confidences.append(float(conf_val) / 100.0)
-        except Exception as exc:
-            logger.warning("Could not calculate word confidences via image_to_data: %s", exc)
-
-        avg_conf = sum(confidences) / len(confidences) if confidences else (0.85 if raw_string_text else 0.0)
-        avg_conf = round(min(1.0, max(0.0, avg_conf)), 3)
-
-        # 3. Clean extracted text to preserve English alphanumeric characters and standard punctuation
-        lines = []
-        for line in raw_string_text.splitlines():
-            cleaned_line = line.strip()
-            if cleaned_line:
-                lines.append(cleaned_line)
-
-        final_text = "\n".join(lines).strip()
-        return final_text, avg_conf
-
+        raw_string_text = pytesseract.image_to_string(image, lang=lang_spec).strip()
     except (pytesseract.TesseractNotFoundError, FileNotFoundError) as exc:
         logger.error("Tesseract binary is not installed or missing from PATH: %s", exc)
         raise OCRProcessingError(
             "Tesseract OCR engine is not installed or available on the server."
         ) from exc
     except Exception as exc:
-        logger.exception("Pytesseract OCR processing failed: %s", exc)
-        raise OCRProcessingError(f"OCR processing failed: {str(exc)}") from exc
+        logger.warning("OCR failed with lang='%s', attempting fallback to 'eng': %s", lang_spec, exc)
+        try:
+            raw_string_text = pytesseract.image_to_string(image, lang="eng").strip()
+            used_lang = "eng"
+        except Exception as inner_exc:
+            logger.exception("Pytesseract OCR fallback processing failed: %s", inner_exc)
+            raise OCRProcessingError(f"OCR processing failed: {str(inner_exc)}") from inner_exc
+
+    # Calculate word confidences
+    confidences: List[float] = []
+    try:
+        data = pytesseract.image_to_data(image, lang=used_lang, output_type=pytesseract.Output.DICT)
+        n_boxes = len(data.get("text", []))
+        for i in range(n_boxes):
+            text_word = str(data["text"][i]).strip()
+            conf_val = data["conf"][i]
+            if text_word and conf_val > 0:
+                confidences.append(float(conf_val) / 100.0)
+    except Exception as exc:
+        logger.warning("Could not calculate word confidences via image_to_data: %s", exc)
+
+    avg_conf = sum(confidences) / len(confidences) if confidences else (0.85 if raw_string_text else 0.0)
+    avg_conf = round(min(1.0, max(0.0, avg_conf)), 3)
+
+    lines = [line.strip() for line in raw_string_text.splitlines() if line.strip()]
+    final_text = "\n".join(lines).strip()
+
+    # Detect if extracted text contains Devanagari/Hindi characters
+    has_devanagari = bool(re.search(r"[\u0900-\u097F]", final_text))
+    if has_devanagari:
+        lang_code = "hi"
+        lang_name = "Hindi"
+    else:
+        lang_code = "en"
+        lang_name = "English"
+
+    return final_text, avg_conf, lang_code, lang_name
 
 
 def extract_text(file_bytes: bytes, filename: str) -> OCRResult:
     """
-    Extract text from an image using lightweight Tesseract OCR (English language mode).
+    Extract text from an image using lightweight Tesseract OCR (supporting English and Hindi).
     Guarantees low memory usage (< 50MB RAM).
     """
     if not file_bytes:
@@ -190,21 +202,22 @@ def extract_text(file_bytes: bytes, filename: str) -> OCRResult:
         raise OCRProcessingError("Failed to preprocess image for OCR.") from exc
 
     # 4. Execute Tesseract OCR
-    extracted_text, confidence = _run_tesseract(processed_image)
+    extracted_text, confidence, lang_code, lang_name = _run_tesseract(processed_image)
 
-    # Check if any English alphanumeric text was extracted
-    has_alphanumeric = bool(re.search(r"[a-zA-Z0-9]", extracted_text))
+    # Check if text contains English alphanumeric OR Hindi Devanagari characters
+    has_valid_chars = bool(re.search(r"[a-zA-Z0-9\u0900-\u097F]", extracted_text))
 
-    if not extracted_text or not has_alphanumeric:
-        logger.warning("No readable English text found in image %s using Tesseract OCR", filename)
+    if not extracted_text or not has_valid_chars:
+        logger.warning("No readable English or Hindi text found in image %s using Tesseract OCR", filename)
         raise OCRProcessingError(
-            "No readable English text was found in this screenshot. Please upload a clear screenshot containing legible text."
+            "No readable text was found in this screenshot. Please upload a clear screenshot containing legible English or Hindi text."
         )
 
     logger.info(
-        "Tesseract OCR successfully extracted %d characters from %s (confidence: %.2f)",
+        "Tesseract OCR successfully extracted %d characters from %s (lang: %s, confidence: %.2f)",
         len(extracted_text),
         filename,
+        lang_name,
         confidence,
     )
 
@@ -214,6 +227,6 @@ def extract_text(file_bytes: bytes, filename: str) -> OCRResult:
         filename=filename,
         width=width,
         height=height,
-        detected_language="en",
-        detected_language_name="English",
+        detected_language=lang_code,
+        detected_language_name=lang_name,
     )
