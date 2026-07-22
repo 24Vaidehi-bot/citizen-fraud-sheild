@@ -8,6 +8,7 @@ interface ScanContextType {
   setCurrentResult: (result: AnalysisResult | null) => void;
   addToHistory: (result: AnalysisResult) => void;
   setIsScanning: (v: boolean) => void;
+  resetScanState: () => void;
 }
 
 const ScanContext = createContext<ScanContextType | null>(null);
@@ -21,8 +22,13 @@ export function ScanProvider({ children }: { children: ReactNode }) {
     setScanHistory(prev => [result, ...prev.slice(0, 49)]);
   };
 
+  const resetScanState = React.useCallback(() => {
+    setIsScanning(false);
+    setCurrentResult(null);
+  }, []);
+
   return (
-    <ScanContext.Provider value={{ currentResult, scanHistory, isScanning, setCurrentResult, addToHistory, setIsScanning }}>
+    <ScanContext.Provider value={{ currentResult, scanHistory, isScanning, setCurrentResult, addToHistory, setIsScanning, resetScanState }}>
       {children}
     </ScanContext.Provider>
   );

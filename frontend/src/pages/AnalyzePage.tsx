@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useRef } from 'react';
+import React, { useState, useCallback, useRef, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
@@ -11,6 +11,7 @@ import ScanAnimation from '../components/shared/ScanAnimation';
 import GlassCard from '../components/shared/GlassCard';
 import { useTranslation } from '../hooks/useTranslation';
 import { useLanguage } from '../context/LanguageContext';
+import type { AnalysisResult } from '../lib/mockAnalysis';
 
 type InputMode = 'text' | 'image' | 'url';
 
@@ -36,6 +37,26 @@ export default function AnalyzePage() {
   const [uploadedFile, setUploadedFile] = useState<File | null>(null);
   const [error, setError] = useState('');
   const fileRef = useRef<HTMLInputElement>(null);
+  const abortControllerRef = useRef<AbortController | null>(null);
+
+  // Requirement 3: Reset Analyze page state whenever it mounts
+  // Requirement 2: Ensure isScanning is always reset to false
+  // Requirement 7: Cancel any running async request if Analyze page unmounts
+  useEffect(() => {
+    setText('');
+    setUrl('');
+    setUploadedFile(null);
+    setError('');
+    setIsScanning(false);
+
+    return () => {
+      if (abortControllerRef.current) {
+        abortControllerRef.current.abort();
+        abortControllerRef.current = null;
+      }
+      setIsScanning(false);
+    };
+  }, [setIsScanning]);
 
   const inputModes: { id: InputMode; icon: React.ElementType; label: string; desc: string }[] = [
     { id: 'text', icon: modeIcons.text, label: t.analyze.modes.text.label, desc: t.analyze.modes.text.desc },
@@ -64,52 +85,48 @@ export default function AnalyzePage() {
   const handleScan = async () => {
     setError('');
 
-    if (mode === 'image') {
-      if (!uploadedFile) { setError(t.analyze.errors.noImage); return; }
-      setIsScanning(true);
-      try {
-        const result = await uploadScreenshot(uploadedFile);
-        setCurrentResult(result);
-        addToHistory(result);
-        navigate('/results');
-      } catch (err) {
-        setError(err instanceof ApiError ? err.message : (err as Error).message || t.analyze.errors.ocrFailed);
-      } finally {
-        setIsScanning(false);
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+    }
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
+
+    let scanResult: AnalysisResult | null = null;
+    let scanSuccess = false;
+
+    try {
+      if (mode === 'image') {
+        if (!uploadedFile) { setError(t.analyze.errors.noImage); return; }
+        setIsScanning(true);
+        scanResult = await uploadScreenshot(uploadedFile, controller.signal);
+        scanSuccess = true;
+      } else if (mode === 'text') {
+        if (!text.trim()) { setError(t.analyze.errors.emptyText); return; }
+        setIsScanning(true);
+        scanResult = await analyzeText(text.trim(), controller.signal);
+        scanSuccess = true;
+      } else if (mode === 'url') {
+        if (!url.trim()) { setError(t.analyze.errors.emptyUrl); return; }
+        setIsScanning(true);
+        scanResult = await analyzeUrl(url.trim(), controller.signal);
+        scanSuccess = true;
       }
-      return;
+    } catch (err: any) {
+      if (err.name === 'AbortError' || controller.signal.aborted) {
+        return;
+      }
+      setError(err instanceof ApiError ? err.message : (err as Error).message || "Analysis failed");
+    } finally {
+      setIsScanning(false);
+      if (abortControllerRef.current === controller) {
+        abortControllerRef.current = null;
+      }
     }
 
-    if (mode === 'text') {
-      if (!text.trim()) { setError(t.analyze.errors.emptyText); return; }
-      setIsScanning(true);
-      try {
-        const result = await analyzeText(text.trim());
-        setCurrentResult(result);
-        addToHistory(result);
-        navigate('/results');
-      } catch (err) {
-        setError(err instanceof ApiError ? err.message : (err as Error).message || "Analysis failed");
-      } finally {
-        setIsScanning(false);
-      }
-      return;
-    }
-
-    if (mode === 'url') {
-      if (!url.trim()) { setError(t.analyze.errors.emptyUrl); return; }
-      setIsScanning(true);
-      try {
-        const result = await analyzeUrl(url.trim());
-        setCurrentResult(result);
-        addToHistory(result);
-        navigate('/results');
-      } catch (err) {
-        setError(err instanceof ApiError ? err.message : (err as Error).message || "URL analysis failed");
-      } finally {
-        setIsScanning(false);
-      }
-      return;
+    if (scanSuccess && scanResult && !controller.signal.aborted) {
+      setCurrentResult(scanResult);
+      addToHistory(scanResult);
+      navigate('/results');
     }
   };
 

@@ -180,15 +180,27 @@ function ReportCyberCrimeModal({ t, onClose, onConfirm }: { t: Locale; onClose: 
 export default function ResultsPage() {
   const navigate = useNavigate();
   const t = useTranslation();
-  const { currentResult } = useScan();
+  const { currentResult, setCurrentResult, setIsScanning } = useScan();
   const [copied, setCopied] = useState(false);
   const [showReportModal, setShowReportModal] = useState(false);
 
-  useEffect(() => {
-    if (!currentResult) navigate('/analyze');
-  }, [currentResult, navigate]);
+  const handleScanAnother = (e: React.MouseEvent) => {
+    e.preventDefault();
+    setIsScanning(false);
+    setCurrentResult(null);
+    navigate('/analyze');
+  };
 
-  if (!currentResult) return null;
+  useEffect(() => {
+    setIsScanning(false);
+    if (!currentResult) {
+      navigate('/analyze', { replace: true });
+    }
+  }, [currentResult, navigate, setIsScanning]);
+
+  if (!currentResult) {
+    return <div className="min-h-screen pt-24 pb-16" />;
+  }
 
   const {
     score, threatLevel, label, summary, indicators, redFlags, safeSignals, recommendation, input,
@@ -224,6 +236,7 @@ ${t.results.reportTemplate.recommendation}: ${recommendation}
         <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="mb-8">
           <Link
             to="/analyze"
+            onClick={handleScanAnother}
             className="inline-flex items-center gap-2 text-gray-400 hover:text-white text-sm transition-colors"
             onMouseEnter={e => (e.currentTarget.style.color = '#FFD60A')}
             onMouseLeave={e => (e.currentTarget.style.color = '')}
@@ -470,6 +483,7 @@ ${t.results.reportTemplate.recommendation}: ${recommendation}
           </button>
           <Link
             to="/analyze"
+            onClick={handleScanAnother}
             className="flex-1 btn-cyber flex items-center justify-center gap-2 text-sm py-3"
           >
             <RefreshCw className="w-4 h-4 relative z-10" />

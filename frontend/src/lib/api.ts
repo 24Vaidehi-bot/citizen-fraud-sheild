@@ -104,21 +104,23 @@ function mapAnalysisResult(backend: BackendAnalysisResult): AnalysisResult {
 // Public API
 // ---------------------------------------------------------------------------
 
-export async function analyzeText(text: string): Promise<AnalysisResult> {
+export async function analyzeText(text: string, signal?: AbortSignal): Promise<AnalysisResult> {
   const res = await fetch(`${API_BASE_URL}/api/analyze/text`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ text }),
+    signal,
   });
   if (!res.ok) throw new ApiError(await extractErrorMessage(res), res.status);
   return mapAnalysisResult(await res.json());
 }
 
-export async function analyzeUrl(url: string): Promise<AnalysisResult> {
+export async function analyzeUrl(url: string, signal?: AbortSignal): Promise<AnalysisResult> {
   const res = await fetch(`${API_BASE_URL}/api/analyze/url`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ url }),
+    signal,
   });
   if (!res.ok) throw new ApiError(await extractErrorMessage(res), res.status);
   return mapAnalysisResult(await res.json());
@@ -132,13 +134,14 @@ export async function analyzeUrl(url: string): Promise<AnalysisResult> {
  * detected language, and a viewable image URL) so the results page can
  * render everything the OCR pipeline produced.
  */
-export async function uploadScreenshot(file: File): Promise<AnalysisResult> {
+export async function uploadScreenshot(file: File, signal?: AbortSignal): Promise<AnalysisResult> {
   const formData = new FormData();
   formData.append('file', file);
 
   const res = await fetch(`${API_BASE_URL}/api/upload/screenshot`, {
     method: 'POST',
     body: formData,
+    signal,
   });
   if (!res.ok) throw new ApiError(await extractErrorMessage(res), res.status);
 

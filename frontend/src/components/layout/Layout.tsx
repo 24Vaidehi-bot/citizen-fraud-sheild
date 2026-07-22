@@ -25,7 +25,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
 
       <Navbar />
       <main className="flex-1 relative z-10">
-        <AnimatePresence mode="wait">
+        <AnimatePresence mode="wait" initial={false}>
           <motion.div
             key={location.pathname}
             variants={pageVariants}
@@ -34,7 +34,9 @@ export default function Layout({ children }: { children: React.ReactNode }) {
             exit="exit"
             transition={{ duration: 0.3, ease: 'easeOut' }}
           >
-            {children}
+            {React.isValidElement(children)
+              ? React.cloneElement(children as React.ReactElement<any>, { location })
+              : children}
           </motion.div>
         </AnimatePresence>
       </main>
