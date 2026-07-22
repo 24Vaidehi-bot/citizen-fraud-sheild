@@ -204,13 +204,11 @@ def extract_text(file_bytes: bytes, filename: str) -> OCRResult:
     # 4. Execute Tesseract OCR
     extracted_text, confidence, lang_code, lang_name = _run_tesseract(processed_image)
 
-    # Check if text contains English alphanumeric OR Hindi Devanagari characters
-    has_valid_chars = bool(re.search(r"[a-zA-Z0-9\u0900-\u097F]", extracted_text))
-
-    if not extracted_text or not has_valid_chars:
-        logger.warning("No readable English or Hindi text found in image %s using Tesseract OCR", filename)
+    # Check if text contains any readable non-whitespace character
+    if not extracted_text or not extracted_text.strip():
+        logger.warning("No readable text found in image %s using Tesseract OCR", filename)
         raise OCRProcessingError(
-            "No readable text was found in this screenshot. Please upload a clear screenshot containing legible English or Hindi text."
+            "No readable text was found in this screenshot. Please upload a clear screenshot containing legible text."
         )
 
     logger.info(
