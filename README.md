@@ -17,7 +17,7 @@ Existing security solutions focus primarily on enterprise IT security and offer 
 - 🔍 **Multi-Channel Scam Detection**:
   - **Text & Email Analysis**: Evaluates raw text for urgency manipulation, authority impersonation, financial extortion, and lottery/job scams.
   - **URL & Phishing Inspector**: Analyzes web links for suspicious TLDs, domain spoofing, obfuscated shorteners, and credential-harvesting patterns.
-  - **Screenshot & Image OCR**: Upload screenshots of text messages or chats; automatically extracts text via Tesseract OCR and conducts real-time threat evaluation.
+  - **Screenshot & Image OCR**: Upload screenshots of text messages or chats; automatically extracts text via EasyOCR and conducts real-time threat evaluation.
 - 🧠 **Explainable AI (XAI) & Risk Engine**:
   - **Dynamic Risk Score (0–100)**: Quantitative threat score mapped to 4 threat levels (*Low*, *Medium*, *High*, *Critical*).
   - **Red Flag Breakdowns**: Pinpoints exact phrases, suspicious patterns, and deceptive tactics matched by the rule engine.
@@ -39,7 +39,7 @@ Existing security solutions focus primarily on enterprise IT security and offer 
 - **Web Server**: Uvicorn
 - **Data Validation & Schemas**: Pydantic v2
 - **ORM & Database**: SQLAlchemy, SQLite (production-ready for PostgreSQL / MySQL)
-- **OCR Engine**: Tesseract OCR (`pytesseract` & Pillow)
+- **OCR Engine**: EasyOCR (`easyocr` & Pillow & PyTorch)
 
 ### **Frontend**
 - **Framework**: React 19 + TypeScript
@@ -100,7 +100,7 @@ citizen-fraud-shield/
   ┌──────────────┼──────────────┐
   │ (If Image)   │ (If Text)    │ (If URL)
   ▼              ▼              ▼
-[Tesseract OCR] [Rule Engine]  [URL Analyzer]
+[EasyOCR Engine] [Rule Engine]  [URL Analyzer]
   │              │              │
   └──────────────┼──────────────┘
                  ▼
@@ -125,7 +125,7 @@ citizen-fraud-shield/
 - **Python**: v3.10 or higher
 - **Node.js**: v18.x or higher (npm v9+)
 - **Git**
-- **Tesseract OCR Engine** (for image screenshot processing)
+- **EasyOCR Engine** (for image screenshot processing)
 
 ---
 
@@ -197,30 +197,9 @@ citizen-fraud-shield/
 
 ---
 
-## 👁️ OCR Setup (Tesseract Configuration)
+## 👁️ OCR Engine (EasyOCR Configuration)
 
-To enable screenshot analysis, Tesseract OCR must be installed on your system.
-
-### Installation Options
-
-- **Windows**:
-  1. Download and run the Tesseract installer from [UB-Mannheim Tesseract OCR](https://github.com/UB-Mannheim/tesseract/wiki).
-  2. Install Tesseract to the default directory (`C:\Program Files\Tesseract-OCR`).
-  3. Ensure `tesseract.exe` path is recognized or update the `TESSERACT_PATH` in your `.env` file:
-     ```env
-     TESSERACT_PATH=C:\Program Files\Tesseract-OCR\tesseract.exe
-     ```
-
-- **macOS**:
-  ```bash
-  brew install tesseract
-  ```
-
-- **Linux (Ubuntu/Debian)**:
-  ```bash
-  sudo apt-get update
-  sudo apt-get install -y tesseract-ocr
-  ```
+Screenshot analysis uses **EasyOCR** (PyTorch / pure Python). No system binaries (like Tesseract) are required, enabling direct deployment on Vercel and serverless platforms.
 
 ---
 
