@@ -303,6 +303,14 @@ def run_and_store_url_analysis(
             ),
         )
 
+        # Enforce non-SAFE baseline for unverified external domains
+        from app.services.url_analyzer import _extract_hostname, _is_trusted_domain, _normalize_url
+        _, parsed = _normalize_url(url)
+        hostname = _extract_hostname(parsed)
+        if hostname and not _is_trusted_domain(hostname):
+            combined_score = max(15.0, combined_score)
+
+
         # ====================================================
         # 4. Convert URL indicators
         # ====================================================

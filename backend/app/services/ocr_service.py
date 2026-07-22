@@ -7,6 +7,8 @@ Completely avoids memory-heavy ML frameworks (EasyOCR, PyTorch, TorchVision).
 
 import io
 import logging
+import os
+import re
 import shutil
 from typing import List, Tuple
 from PIL import Image, ImageOps
@@ -23,12 +25,40 @@ MAX_IMAGE_WIDTH = 2500
 MAX_IMAGE_HEIGHT = 2500
 
 
+from app.core.exceptions import OCRProcessingError
+from app.models.schemas import OCRResult
+
+logger = logging.getLogger(__name__)
+
+# Maximum image dimension limits for memory optimization
+MAX_IMAGE_WIDTH = 2500
+MAX_IMAGE_HEIGHT = 2500
+
+
 def _check_tesseract_availability() -> bool:
-    """Verify system tesseract binary via shutil.which("tesseract") or pytesseract."""
-    tesseract_bin = shutil.which("tesseract")
-    if tesseract_bin:
-        logger.info("Tesseract binary found via shutil.which at: %s", tesseract_bin)
+    """
+    Verify system tesseract binary via shutil.which("tesseract"), environment variables,
+    or standard operating system install paths (Linux, macOS, Windows).
+    """
+    if shutil.which("tesseract"):
+        logger.info("Tesseract binary found via PATH")
         return True
+
+    # Common Windows/Linux fallback paths
+    possible_paths = [
+        os.environ.get("TESSERACT_CMD", ""),
+        r"C:\Program Files\Tesseract-OCR\tesseract.exe",
+        r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe",
+        os.path.expanduser(r"~\AppData\Local\Programs\Tesseract-OCR\tesseract.exe"),
+        "/usr/bin/tesseract",
+        "/usr/local/bin/tesseract",
+    ]
+
+    for path in possible_paths:
+        if path and os.path.exists(path):
+            pytesseract.pytesseract.tesseract_cmd = path
+            logger.info("Configured pytesseract.tesseract_cmd to: %s", path)
+            return True
 
     try:
         version = pytesseract.get_tesseract_version()
@@ -83,50 +113,37 @@ def _preprocess(image: Image.Image) -> Image.Image:
 
 def _run_tesseract(image: Image.Image) -> Tuple[str, float]:
     """
-    Execute Tesseract OCR using pytesseract.
+    Execute Tesseract OCR strictly with English language model ('eng').
     Returns (extracted_text, average_confidence).
     """
     try:
-        # Use image_to_data to retrieve per-word text and confidence values
-        data = pytesseract.image_to_data(image, lang="eng", output_type=pytesseract.Output.DICT)
+        # 1. Primary extraction using image_to_string for optimal reading layout
+        raw_string_text = pytesseract.image_to_string(image, lang="eng").strip()
 
-        extracted_words: List[str] = []
+        # 2. Get bounding box / confidence data via image_to_data
         confidences: List[float] = []
+        try:
+            data = pytesseract.image_to_data(image, lang="eng", output_type=pytesseract.Output.DICT)
+            n_boxes = len(data.get("text", []))
+            for i in range(n_boxes):
+                text_word = str(data["text"][i]).strip()
+                conf_val = data["conf"][i]
+                if text_word and conf_val > 0:
+                    confidences.append(float(conf_val) / 100.0)
+        except Exception as exc:
+            logger.warning("Could not calculate word confidences via image_to_data: %s", exc)
 
-        n_boxes = len(data.get("text", []))
-        for i in range(n_boxes):
-            text = str(data["text"][i]).strip()
-            conf_val = data["conf"][i]
-
-            # Tesseract gives confidence -1 or >= 0
-            if text and conf_val >= 0:
-                extracted_words.append(text)
-                confidences.append(float(conf_val) / 100.0)
-
-        # Fallback to image_to_string if image_to_data yielded no words
-        if not extracted_words:
-            raw_text = pytesseract.image_to_string(image, lang="eng").strip()
-            if raw_text:
-                lines = [line.strip() for line in raw_text.splitlines() if line.strip()]
-                full_text = "\n".join(lines)
-                return full_text, 0.85
-            return "", 0.0
-
-        # Build clean formatted text from image_to_data line structures
-        lines_dict = {}
-        for i in range(n_boxes):
-            text = str(data["text"][i]).strip()
-            conf_val = data["conf"][i]
-            if text and conf_val >= 0:
-                line_num = (data["block_num"][i], data["par_num"][i], data["line_num"][i])
-                lines_dict.setdefault(line_num, []).append(text)
-
-        formatted_lines = [" ".join(words) for words in lines_dict.values() if words]
-        final_text = "\n".join(formatted_lines).strip()
-
-        avg_conf = sum(confidences) / len(confidences) if confidences else 0.85
+        avg_conf = sum(confidences) / len(confidences) if confidences else (0.85 if raw_string_text else 0.0)
         avg_conf = round(min(1.0, max(0.0, avg_conf)), 3)
 
+        # 3. Clean extracted text to preserve English alphanumeric characters and standard punctuation
+        lines = []
+        for line in raw_string_text.splitlines():
+            cleaned_line = line.strip()
+            if cleaned_line:
+                lines.append(cleaned_line)
+
+        final_text = "\n".join(lines).strip()
         return final_text, avg_conf
 
     except (pytesseract.TesseractNotFoundError, FileNotFoundError) as exc:
@@ -141,9 +158,8 @@ def _run_tesseract(image: Image.Image) -> Tuple[str, float]:
 
 def extract_text(file_bytes: bytes, filename: str) -> OCRResult:
     """
-    Extract text from an image using lightweight Tesseract OCR.
-
-    Guarantees low memory usage (< 50MB RAM) without PyTorch or large ML models.
+    Extract text from an image using lightweight Tesseract OCR (English language mode).
+    Guarantees low memory usage (< 50MB RAM).
     """
     if not file_bytes:
         raise OCRProcessingError("The uploaded image is empty.")
@@ -176,10 +192,13 @@ def extract_text(file_bytes: bytes, filename: str) -> OCRResult:
     # 4. Execute Tesseract OCR
     extracted_text, confidence = _run_tesseract(processed_image)
 
-    if not extracted_text or not extracted_text.strip():
-        logger.warning("No readable text found in image %s using Tesseract OCR", filename)
+    # Check if any English alphanumeric text was extracted
+    has_alphanumeric = bool(re.search(r"[a-zA-Z0-9]", extracted_text))
+
+    if not extracted_text or not has_alphanumeric:
+        logger.warning("No readable English text found in image %s using Tesseract OCR", filename)
         raise OCRProcessingError(
-            "No readable text was found in this image. Please upload a clear screenshot containing legible text."
+            "No readable English text was found in this screenshot. Please upload a clear screenshot containing legible text."
         )
 
     logger.info(

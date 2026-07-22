@@ -15,90 +15,82 @@ _TRUSTED_DOMAINS = {
     "google.com", "microsoft.com", "github.com", "gov.in", "nic.in",
     "apple.com", "amazon.com", "wikipedia.org", "youtube.com", "sbi.co.in",
     "hdfcbank.com", "icicibank.com", "axisbank.com", "kotak.com",
+    "pnbindia.in", "bankofbaroda.in", "canarabank.com", "unionbankofindia.co.in",
+    "paytm.com", "phonepe.com", "paypal.com", "razorpay.com",
 }
 
-# Known URL shorteners that hide the real destination.
-_SHORTENER_DOMAINS = re.compile(
-    r"""^(
-        bit\.ly | tinyurl\.com | t\.co | goo\.gl | ow\.ly | short\.io |
-        rb\.gy | cutt\.ly | is\.gd | v\.gd | buff\.ly | ift\.tt |
-        tiny\.cc | lnkd\.in | clck\.ru | shorte\.st | adf\.ly |
-        linktr\.ee | snip\.ly | su\.pr | go\.tiny\.email |
-        url\.cn | dwz\.cn | sina\.lt | weibo\.cn | shorturl\.at |
-        dub\.sh | qr\.ae | s\.id | v\.ht | bc\.vc | tiny\.one |
-        urlr\.me | rotf\.lol | git\.io
-    )$""",
-    re.VERBOSE | re.IGNORECASE,
-)
+# Known URL shorteners that hide the real destination address.
+_SHORTENER_DOMAINS = {
+    "bit.ly", "tinyurl.com", "t.co", "goo.gl", "ow.ly", "short.io",
+    "rb.gy", "cutt.ly", "is.gd", "v.gd", "buff.ly", "ift.tt",
+    "tiny.cc", "lnkd.in", "clck.ru", "shorte.st", "adf.ly",
+    "linktr.ee", "snip.ly", "su.pr", "go.tiny.email",
+    "url.cn", "dwz.cn", "sina.lt", "weibo.cn", "shorturl.at",
+    "dub.sh", "qr.ae", "s.id", "v.ht", "bc.vc", "tiny.one",
+    "urlr.me", "rotf.lol", "git.io", "opn.to", "t.ly", "shorturl.com",
+}
 
 # Major banking and payment brand keywords for fake banking & typo-squatting checks.
 _BANK_BRANDS = (
     r"sbi|statebank|hdfc|hdfcbank|icici|icicibank|axis|axisbank|kotak|kotakbank|"
     r"pnb|punjabnationalbank|bankofbaroda|bob|canara|canarabank|unionbank|indusind|"
     r"yesbank|idfc|idfcfirstbank|chase|wellsfargo|citi|citibank|bankofamerica|"
-    r"hsbc|barclays|paypal|stripe|razorpay|paytm|phonepe|gpay|googlepay|bharatpe|cred"
+    r"hsbc|barclays|paypal|stripe|razorpay|paytm|phonepe|gpay|googlepay|bharatpe|cred|bhim"
 )
 
 # Pattern for fake banking domains, brand spoofing, or banking keywords.
 _FAKE_BANKING_PATTERN = re.compile(
-    rf"""(
-        ({_BANK_BRANDS})[-.]?(net|bank|online|secure|login|verify|update|kyc|portal|service|wallet) |
-        (netbanking|bankinglogin|securebank|banksecure|bankverify)[-.]?
-    )""",
-    re.VERBOSE | re.IGNORECASE,
+    rf"({_BANK_BRANDS})[-._]?(netbanking|banking|bank|online|secure|login|verify|update|kyc|portal|service|wallet|card|account|support|alert|helpdesk)",
+    re.IGNORECASE,
 )
 
 # Typo-squatting & misspelling heuristics.
 _TYPO_SQUATTING_PATTERN = re.compile(
-    r"\b("
-    r"paytmm|hdfcc|sbiibank|icicci|phonpe|gpayy|paypa1|paypaI|chasee|cit1bank|"
-    r"arnazon|micros0ft|goog1e|s-b-i|h-d-f-c|pay-tm|phone-pe"
-    r")\b",
+    r"\b(paytmm|hdfcc|sbiibank|icicci|phonpe|gpayy|paypa1|paypaI|chasee|cit1bank|"
+    r"arnazon|micros0ft|goog1e|s-b-i|h-d-f-c|pay-tm|phone-pe|razor-pay)\b",
     re.IGNORECASE,
 )
 
 # KYC / account-update / verification scam keywords in URLs.
 _KYC_PATTERN = re.compile(
-    r"kyc|aadhar|aadhaar|pan[\-_.]?card|pan[\-_.]?update|ekyc|"
-    r"verify[\-_.]?account|account[\-_.]?verify|update[\-_.]?account|"
-    r"re[\-_.]?kyc|document[\-_.]?upload|upload[\-_.]?document|"
-    r"biometric[\-_.]?verify|identity[\-_.]?verify",
+    r"kyc|aadhar|aadhaar|pan[-._]?card|pan[-._]?update|ekyc|"
+    r"verify[-._]?account|account[-._]?verify|update[-._]?account|"
+    r"re[-._]?kyc|document[-._]?upload|upload[-._]?document|"
+    r"biometric[-._]?verify|identity[-._]?verify|kyc[-._]?update",
     re.IGNORECASE,
 )
 
 # Payment / wallet scam keywords.
 _PAYMENT_SCAM_PATTERN = re.compile(
-    r"cashback|refund[\-_.]?claim|claim[\-_.]?refund|"
-    r"upi[\-_.]?reward|upi[\-_.]?bonus|free[\-_.]?recharge|"
-    r"lottery[\-_.]?prize|prize[\-_.]?claim|"
-    r"coupon[\-_.]?redeem|instant[\-_.]?money|"
-    r"earn[\-_.]?daily|earn[\-_.]?online|work[\-_.]?from[\-_.]?home|"
-    r"scratch[\-_.]?card|spin[\-_.]?win|crypto[\-_.]?bonus",
+    r"cashback|refund[-._]?claim|claim[-._]?refund|"
+    r"upi[-._]?reward|upi[-._]?bonus|free[-._]?recharge|"
+    r"lottery[-._]?prize|prize[-._]?claim|claim[-._]?reward|"
+    r"coupon[-._]?redeem|instant[-._]?money|"
+    r"earn[-._]?daily|earn[-._]?online|work[-._]?from[-._]?home|"
+    r"scratch[-._]?card|spin[-._]?win|crypto[-._]?bonus",
     re.IGNORECASE,
 )
 
 # Government impersonation keywords.
 _GOVT_IMPERSONATION_PATTERN = re.compile(
-    r"gov\.in\b(?!$) |"          # gov.in is legit; gov.in.anything is not
-    r"\.gov-in\. | gov-india |"
-    r"income[\-_.]?tax[\-_.]?refund | it[\-_.]?refund |"
-    r"epfo[\-_.]?claim | provident[\-_.]?fund[\-_.]?claim |"
-    r"pm[\-_.]?kisan[\-_.]?yojana | yojana[\-_.]?claim |"
-    r"ration[\-_.]?card[\-_.]?update | aayushman[\-_.]?bharat |"
-    r"uidai[\-_.]?update | aadhaar[\-_.]?link",
-    re.VERBOSE | re.IGNORECASE,
+    r"gov\.in\.(?!$)|gov-in|gov-india|"
+    r"income[-._]?tax[-._]?refund|it[-._]?refund|"
+    r"epfo[-._]?claim|provident[-._]?fund|epfindia|"
+    r"pm[-._]?kisan|yojana[-._]?claim|ration[-._]?card|"
+    r"aayushman[-._]?bharat|uidai[-._]?update|aadhaar[-._]?link",
+    re.IGNORECASE,
 )
 
 # Phishing keywords commonly embedded in URL domains, paths, or parameters.
 _PHISHING_KEYWORDS_PATTERN = re.compile(
-    r"login[\-_.]?verify | verify[\-_.]?login | secure[\-_.]?login |"
-    r"account[\-_.]?suspended | account[\-_.]?block |"
-    r"password[\-_.]?reset | reset[\-_.]?password |"
-    r"otp[\-_.]?verify | verify[\-_.]?otp |"
-    r"click[\-_.]?here | confirm[\-_.]?now |"
-    r"limited[\-_.]?offer | claim[\-_.]?now | act[\-_.]?now |"
-    r"credential | authenticate | session[\-_.]?update",
-    re.VERBOSE | re.IGNORECASE,
+    r"login[-._]?verify|verify[-._]?login|secure[-._]?login|"
+    r"account[-._]?suspended|account[-._]?block|account[-._]?locked|"
+    r"password[-._]?reset|reset[-._]?password|"
+    r"otp[-._]?verify|verify[-._]?otp|"
+    r"click[-._]?here|confirm[-._]?now|"
+    r"limited[-._]?offer|claim[-._]?now|act[-._]?now|"
+    r"credential|authenticate|session[-._]?update|validate[-._]?account",
+    re.IGNORECASE,
 )
 
 # IP-address-based URLs (instead of domain names) — classic phishing signal.
@@ -108,7 +100,7 @@ _IP_URL_PATTERN = re.compile(
 
 # Suspicious TLDs that are disproportionately used for phishing.
 _SUSPICIOUS_TLDS = re.compile(
-    r"\.(xyz|top|club|online|site|live|icu|buzz|gq|ml|cf|ga|tk|pw|cc|biz|info|work|click|link|zip|mov|rest|fit|surf|monster|cfd|sbs|best)$",
+    r"\.(xyz|top|club|online|site|live|icu|buzz|gq|ml|cf|ga|tk|pw|cc|biz|info|work|click|link|zip|mov|rest|fit|surf|monster|cfd|sbs|best|run|space|tech|website|win|vip)$",
     re.IGNORECASE,
 )
 
@@ -129,7 +121,7 @@ _URL_WEIGHTS = {
     "excessive_subdomains": 20,
     "no_https": 15,
     "userinfo_spoofing": 35,
-    "unverified_domain_baseline": 15,
+    "unverified_domain_baseline": 20,
     "very_long_url": 10,
 }
 
@@ -211,7 +203,7 @@ def analyse_url(url: str) -> URLAnalysisOutcome:
         diagnostic_parts.append("Raw IP address in URL — phishing tactic")
 
     # --- URL Shortener ---
-    if hostname and _SHORTENER_DOMAINS.match(hostname):
+    if hostname and (hostname in _SHORTENER_DOMAINS or any(hostname.endswith("." + d) for d in _SHORTENER_DOMAINS)):
         ind = URLIndicator(
             "Shortened URL",
             f"Domain '{hostname}' is a URL shortener that hides the actual destination address.",
@@ -352,4 +344,3 @@ def analyse_url(url: str) -> URLAnalysisOutcome:
         indicators=indicators,
         diagnostic_text=diagnostic_text,
     )
-

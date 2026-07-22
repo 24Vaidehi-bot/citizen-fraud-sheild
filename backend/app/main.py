@@ -40,7 +40,24 @@ app.add_middleware(
 
 @app.on_event("startup")
 def on_startup() -> None:
+    import logging
+    import shutil
+    import pytesseract
+
+    logger = logging.getLogger("app.main")
     init_db()
+
+    # Check and log Tesseract path/version
+    tesseract_path = shutil.which("tesseract")
+    logger.info("Tesseract binary path on startup: %s", tesseract_path)
+    if tesseract_path:
+        try:
+            version = pytesseract.get_tesseract_version()
+            logger.info("Tesseract version detected on startup: %s", version)
+        except Exception as exc:
+            logger.warning("Found Tesseract binary but failed to get version: %s", exc)
+    else:
+        logger.error("Tesseract binary NOT found on startup PATH.")
 
 
 @app.exception_handler(FraudShieldError)
