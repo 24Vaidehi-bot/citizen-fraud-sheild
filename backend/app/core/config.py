@@ -22,8 +22,6 @@ class Settings(BaseSettings):
     upload_dir: str = "uploads"
     database_url: str = "sqlite:///./storage/fraud_shield.db"
 
-    tesseract_cmd: str = "tesseract"
-
     max_upload_mb: int = 8
 
     @property

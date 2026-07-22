@@ -14,7 +14,10 @@ settings = get_settings()
 
 # Ensure the storage directory exists for file-based SQLite databases.
 if settings.database_url.startswith("sqlite"):
-    Path("storage").mkdir(parents=True, exist_ok=True)
+    try:
+        Path("storage").mkdir(parents=True, exist_ok=True)
+    except Exception:
+        Path("/tmp/storage").mkdir(parents=True, exist_ok=True)
 
 connect_args = {"check_same_thread": False} if settings.database_url.startswith("sqlite") else {}
 

@@ -23,7 +23,7 @@ app/
 ├── services/                # business logic — no HTTP concerns
 │   ├── analyzer.py           # rule-based scam pattern detection engine
 │   ├── analysis_service.py    # runs detection + persists a result
-│   ├── ocr_service.py          # Tesseract OCR extraction
+│   ├── ocr_service.py          # EasyOCR text extraction
 │   ├── predict_service.py       # score -> probability mapping
 │   ├── explainer.py              # builds human-readable explanations
 │   └── history_service.py         # history queries, stats, deletion
@@ -51,10 +51,6 @@ app/
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 cp .env.example .env
-
-# System dependency for OCR:
-#   Ubuntu/Debian: sudo apt-get install tesseract-ocr
-#   macOS:         brew install tesseract
 
 python run.py   # or: uvicorn app.main:app --reload
 ```

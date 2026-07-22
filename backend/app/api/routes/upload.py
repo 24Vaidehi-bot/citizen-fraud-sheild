@@ -15,7 +15,7 @@ router = APIRouter(prefix="/upload", tags=["Screenshot Upload & OCR"])
 @router.post(
     "/screenshot",
     response_model=ScreenshotAnalysisResponse,
-    summary="Upload a screenshot, extract its text via OCR, and analyze it for scam indicators",
+    summary="Upload a screenshot, extract its text via EasyOCR, and analyze it for scam indicators",
 )
 async def upload_screenshot(
     file: UploadFile = File(..., description="Screenshot image (PNG, JPG, or WEBP)"),

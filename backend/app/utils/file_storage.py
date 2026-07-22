@@ -17,6 +17,13 @@ def save_upload(file_bytes: bytes, original_filename: str) -> str:
     safe_stem = _SAFE_NAME.sub("_", Path(original_filename or "upload").stem)[:60]
     stored_name = f"{safe_stem}_{uuid.uuid4().hex[:8]}{suffix}"
 
-    destination = settings.upload_path / stored_name
-    destination.write_bytes(file_bytes)
+    try:
+        destination = settings.upload_path / stored_name
+        destination.write_bytes(file_bytes)
+    except Exception:
+        fallback_dir = Path("/tmp/uploads")
+        fallback_dir.mkdir(parents=True, exist_ok=True)
+        destination = fallback_dir / stored_name
+        destination.write_bytes(file_bytes)
+
     return stored_name
