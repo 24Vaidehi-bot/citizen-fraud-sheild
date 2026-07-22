@@ -267,8 +267,9 @@ To enable screenshot analysis, Tesseract OCR must be installed on your system.
 
 ## 👥 Team
 
-**Team Tribots**
-- **Vaidehi Dange** — Full Stack Development & AI Model Architecture
+**vaidehidange123**
+- **Vaidehi Dange**
+- **Riddhi Rathi** 
 
 ---
 
