@@ -330,19 +330,17 @@ ${t.results.reportTemplate.recommendation}: ${recommendation}
           transition={{ delay: 0.2 }}
           className="mb-6"
         >
-          <GlassCard className={`border-l-4 ${
-            threatLevel === 'safe' ? 'border-l-emerald-500' :
+          <GlassCard className={`border-l-4 ${threatLevel === 'safe' ? 'border-l-emerald-500' :
             threatLevel === 'low' ? 'border-l-yellow-500' :
-            threatLevel === 'medium' ? 'border-l-orange-500' :
-            'border-l-red-500'
-          }`}>
+              threatLevel === 'medium' ? 'border-l-orange-500' :
+                'border-l-red-500'
+            }`}>
             <div className="flex items-start gap-3">
-              <Info className={`w-5 h-5 flex-shrink-0 mt-0.5 ${
-                threatLevel === 'safe' ? 'text-emerald-400' :
+              <Info className={`w-5 h-5 flex-shrink-0 mt-0.5 ${threatLevel === 'safe' ? 'text-emerald-400' :
                 threatLevel === 'low' ? 'text-yellow-400' :
-                threatLevel === 'medium' ? 'text-orange-400' :
-                'text-red-400'
-              }`} />
+                  threatLevel === 'medium' ? 'text-orange-400' :
+                    'text-red-400'
+                }`} />
               <div>
                 <h3 className="font-semibold text-white mb-1">{t.results.recommendation}</h3>
                 <p className="text-gray-300 text-sm leading-relaxed">{recommendation}</p>

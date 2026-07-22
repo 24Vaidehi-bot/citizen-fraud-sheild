@@ -9,7 +9,8 @@
 import type { AnalysisResult, ThreatIndicator, ThreatLevel } from './mockAnalysis';
 
 const API_BASE_URL: string =
-  (import.meta as any).env?.VITE_API_BASE_URL || 'https://citizen-fraud-sheild.onrender.com';
+  (import.meta as any).env?.VITE_API_BASE_URL || 'https://citizen-fraud-shield.onrender.com';
+
 
 export class ApiError extends Error {
   status?: number;
