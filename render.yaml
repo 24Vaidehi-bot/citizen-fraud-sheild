@@ -2,6 +2,7 @@ services:
   - type: web
     name: citizen-fraud-shield-api
     env: python
+    rootDir: backend
     buildCommand: |
       pip install --no-cache-dir -r requirements.txt
     startCommand: python run.py
