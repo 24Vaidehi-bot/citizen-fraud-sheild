@@ -1,232 +1,308 @@
-"""
-OCR extraction service using lightweight Tesseract OCR (pytesseract + Pillow).
+﻿"""
+Cloud-based OCR extraction service.
 
-Supports both English and Hindi text extraction with automatic fallback.
-Designed for low-memory cloud environments (such as Render free tier 512MB RAM).
-Completely avoids memory-heavy ML frameworks (EasyOCR, PyTorch, TorchVision).
+Replaces the local Tesseract dependency with two cloud providers:
+  1. OCR.Space API (primary) -- free up to 25,000 req/month,
+     works via plain HTTP, requires no system packages whatsoever.
+  2. Google Cloud Vision API (optional secondary) -- used when the env var
+     GOOGLE_CLOUD_VISION_API_KEY is set. Falls back gracefully if absent.
+
+Environment variables
+---------------------
+OCR_SPACE_API_KEY
+    Your OCR.Space API key. Defaults to the "helloworld" demo key
+    (25 req/hour). Register free at https://ocr.space/ocrapi for
+    a 25,000 req/month key.
+
+GOOGLE_CLOUD_VISION_API_KEY
+    (optional) Google Cloud Vision API key. When provided, this
+    becomes the preferred provider and OCR.Space acts as fallback.
 """
 
+from __future__ import annotations
+
+import base64
 import io
+import json
 import logging
 import os
 import re
-import shutil
-from typing import List, Tuple
-from PIL import Image, ImageOps
+from typing import Optional, Tuple
 
-import pytesseract
+import requests
+from PIL import Image, ImageOps
 
 from app.core.exceptions import OCRProcessingError
 from app.models.schemas import OCRResult
 
 logger = logging.getLogger(__name__)
 
-# Maximum image dimension limits for memory optimization
 MAX_IMAGE_WIDTH = 2500
 MAX_IMAGE_HEIGHT = 2500
+MAX_SEND_BYTES = 800_000
 
-
-def _check_tesseract_availability() -> bool:
-    """
-    Verify system tesseract binary via shutil.which("tesseract"), environment variables,
-    or standard operating system install paths (Linux, macOS, Windows).
-    """
-    if shutil.which("tesseract"):
-        logger.info("Tesseract binary found via PATH")
-        return True
-
-    # Common Windows/Linux fallback paths
-    possible_paths = [
-        os.environ.get("TESSERACT_CMD", ""),
-        r"C:\Program Files\Tesseract-OCR\tesseract.exe",
-        r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe",
-        os.path.expanduser(r"~\AppData\Local\Programs\Tesseract-OCR\tesseract.exe"),
-        "/usr/bin/tesseract",
-        "/usr/local/bin/tesseract",
-    ]
-
-    for path in possible_paths:
-        if path and os.path.exists(path):
-            pytesseract.pytesseract.tesseract_cmd = path
-            logger.info("Configured pytesseract.tesseract_cmd to: %s", path)
-            return True
-
-    try:
-        version = pytesseract.get_tesseract_version()
-        logger.info("Tesseract version %s detected via pytesseract", version)
-        return True
-    except Exception:
-        return False
-
-
-def _get_available_languages() -> List[str]:
-    """Return a list of language codes installed in Tesseract."""
-    try:
-        return pytesseract.get_languages()
-    except Exception as exc:
-        logger.warning("Failed to retrieve Tesseract installed languages: %s", exc)
-        return ["eng"]
+_OCR_SPACE_API_KEY: str = os.environ.get("OCR_SPACE_API_KEY", "helloworld")
+_GOOGLE_VISION_API_KEY: Optional[str] = os.environ.get("GOOGLE_CLOUD_VISION_API_KEY")
+_OCR_SPACE_URL = "https://api.ocr.space/parse/image"
+_GOOGLE_VISION_URL = "https://vision.googleapis.com/v1/images:annotate?key={key}"
+_API_TIMEOUT = 30
 
 
 def _preprocess(image: Image.Image) -> Image.Image:
-    """
-    Prepare image for OCR while optimizing memory usage.
-
-    1. Apply EXIF orientation fix.
-    2. Convert transparent/alpha channels to solid white RGB background.
-    3. Downscale oversized images (>2500px).
-    4. Never upscale small images to avoid memory inflation.
-    """
-    # Fix EXIF orientation
     image = ImageOps.exif_transpose(image)
-
-    # Convert transparency (RGBA / LA / P) to RGB on a white background
-    if image.mode in ("RGBA", "LA") or (image.mode == "P" and "transparency" in image.info):
-        background = Image.new("RGB", image.size, (255, 255, 255))
+    if image.mode in ("RGBA", "LA") or (
+        image.mode == "P" and "transparency" in image.info
+    ):
+        bg = Image.new("RGB", image.size, (255, 255, 255))
         if image.mode in ("RGBA", "LA"):
-            mask = image.getchannel("A")
-            background.paste(image, mask=mask)
+            bg.paste(image, mask=image.getchannel("A"))
         else:
-            rgba_img = image.convert("RGBA")
-            background.paste(rgba_img, mask=rgba_img.getchannel("A"))
-        image = background
+            rgba = image.convert("RGBA")
+            bg.paste(rgba, mask=rgba.getchannel("A"))
+        image = bg
     elif image.mode != "RGB":
         image = image.convert("RGB")
-
-    width, height = image.size
-
-    # Downscale oversized screenshots (strictly max 2500x2500)
-    if width > MAX_IMAGE_WIDTH or height > MAX_IMAGE_HEIGHT:
-        scale = min(MAX_IMAGE_WIDTH / width, MAX_IMAGE_HEIGHT / height)
-        new_width = max(1, int(width * scale))
-        new_height = max(1, int(height * scale))
-        logger.info(
-            "Downscaling image for OCR from %dx%d to %dx%d",
-            width, height, new_width, new_height
-        )
-        resample_filter = getattr(Image, "Resampling", Image).LANCZOS
-        image = image.resize((new_width, new_height), resample_filter)
-
+    w, h = image.size
+    if w > MAX_IMAGE_WIDTH or h > MAX_IMAGE_HEIGHT:
+        scale = min(MAX_IMAGE_WIDTH / w, MAX_IMAGE_HEIGHT / h)
+        nw, nh = max(1, int(w * scale)), max(1, int(h * scale))
+        logger.info("Downscaling image for OCR from %dx%d to %dx%d", w, h, nw, nh)
+        resample = getattr(Image, "Resampling", Image).LANCZOS
+        image = image.resize((nw, nh), resample)
     return image
 
 
-def _run_tesseract(image: Image.Image) -> Tuple[str, float, str, str]:
-    """
-    Execute Tesseract OCR supporting both English and Hindi ('eng+hin') with fallback to 'eng'.
-    Returns (extracted_text, average_confidence, detected_language_code, detected_language_name).
-    """
-    avail_langs = _get_available_languages()
-    lang_spec = "eng+hin" if "hin" in avail_langs else "eng"
+def _image_to_jpeg_bytes(image: Image.Image, quality: int = 85) -> bytes:
+    buf = io.BytesIO()
+    image.save(buf, format="JPEG", quality=quality, optimize=True)
+    return buf.getvalue()
 
-    raw_string_text = ""
-    used_lang = lang_spec
 
+def _shrink_if_needed(jpeg_bytes: bytes) -> bytes:
+    if len(jpeg_bytes) <= MAX_SEND_BYTES:
+        return jpeg_bytes
+    img = Image.open(io.BytesIO(jpeg_bytes))
+    for quality in (70, 55, 40, 25):
+        candidate = _image_to_jpeg_bytes(img, quality=quality)
+        if len(candidate) <= MAX_SEND_BYTES:
+            logger.info(
+                "Reduced JPEG to quality=%d (%d bytes) to fit API limit",
+                quality, len(candidate),
+            )
+            return candidate
+    w, h = img.size
+    img = img.resize((w // 2, h // 2), Image.LANCZOS)
+    result = _image_to_jpeg_bytes(img, quality=50)
+    logger.warning("Resized image to 50pct (%d bytes) to meet API limit", len(result))
+    return result
+
+
+def _ocr_via_ocrspace(jpeg_bytes: bytes) -> str:
+    """Call the OCR.Space REST API and return extracted text."""
+    b64 = base64.b64encode(jpeg_bytes).decode("utf-8")
+    payload = {
+        "base64Image": "data:image/jpeg;base64," + b64,
+        "language": "eng",
+        "isOverlayRequired": "false",
+        "detectOrientation": "true",
+        "scale": "true",
+        "OCREngine": "2",
+        "isTable": "false",
+        "filetype": "JPG",
+    }
+    headers = {"apikey": _OCR_SPACE_API_KEY}
     try:
-        raw_string_text = pytesseract.image_to_string(image, lang=lang_spec).strip()
-    except (pytesseract.TesseractNotFoundError, FileNotFoundError) as exc:
-        logger.error("Tesseract binary is not installed or missing from PATH: %s", exc)
+        logger.info("Calling OCR.Space API (payload=%.1f KB)", len(jpeg_bytes) / 1024)
+        response = requests.post(
+            _OCR_SPACE_URL, data=payload, headers=headers, timeout=_API_TIMEOUT
+        )
+        response.raise_for_status()
+    except requests.exceptions.Timeout:
+        raise OCRProcessingError("OCR.Space API request timed out. Please try again.")
+    except requests.exceptions.ConnectionError as exc:
+        raise OCRProcessingError("Cannot reach OCR.Space API: " + str(exc)) from exc
+    except requests.exceptions.HTTPError as exc:
         raise OCRProcessingError(
-            "Tesseract OCR engine is not installed or available on the server."
+            "OCR.Space API returned HTTP " + str(response.status_code) + "."
         ) from exc
-    except Exception as exc:
-        logger.warning("OCR failed with lang='%s', attempting fallback to 'eng': %s", lang_spec, exc)
-        try:
-            raw_string_text = pytesseract.image_to_string(image, lang="eng").strip()
-            used_lang = "eng"
-        except Exception as inner_exc:
-            logger.exception("Pytesseract OCR fallback processing failed: %s", inner_exc)
-            raise OCRProcessingError(f"OCR processing failed: {str(inner_exc)}") from inner_exc
-
-    # Calculate word confidences
-    confidences: List[float] = []
     try:
-        data = pytesseract.image_to_data(image, lang=used_lang, output_type=pytesseract.Output.DICT)
-        n_boxes = len(data.get("text", []))
-        for i in range(n_boxes):
-            text_word = str(data["text"][i]).strip()
-            conf_val = data["conf"][i]
-            if text_word and conf_val > 0:
-                confidences.append(float(conf_val) / 100.0)
-    except Exception as exc:
-        logger.warning("Could not calculate word confidences via image_to_data: %s", exc)
+        data = response.json()
+    except ValueError as exc:
+        raise OCRProcessingError("OCR.Space returned an invalid JSON response.") from exc
+    if data.get("IsErroredOnProcessing"):
+        err_msg = data.get("ErrorMessage", ["Unknown OCR error"])
+        if isinstance(err_msg, list):
+            err_msg = " ".join(str(m) for m in err_msg)
+        raise OCRProcessingError("OCR.Space processing error: " + str(err_msg))
+    parsed_results = data.get("ParsedResults") or []
+    if not parsed_results:
+        raise OCRProcessingError("OCR.Space returned no parsed results for this image.")
+    texts = [
+        r.get("ParsedText", "").strip()
+        for r in parsed_results
+        if r.get("ParsedText", "").strip()
+    ]
+    extracted = "\n".join(texts).strip()
+    logger.info(
+        "OCR.Space returned %d characters (exit code %s)",
+        len(extracted), data.get("OCRExitCode"),
+    )
+    return extracted
 
-    avg_conf = sum(confidences) / len(confidences) if confidences else (0.85 if raw_string_text else 0.0)
-    avg_conf = round(min(1.0, max(0.0, avg_conf)), 3)
 
-    lines = [line.strip() for line in raw_string_text.splitlines() if line.strip()]
-    final_text = "\n".join(lines).strip()
+def _ocr_via_google_vision(jpeg_bytes: bytes) -> str:
+    """Call the Google Cloud Vision REST API for text detection."""
+    if not _GOOGLE_VISION_API_KEY:
+        raise OCRProcessingError("Google Cloud Vision API key not configured.")
+    b64 = base64.b64encode(jpeg_bytes).decode("utf-8")
+    request_body = {
+        "requests": [
+            {
+                "image": {"content": b64},
+                "features": [{"type": "TEXT_DETECTION", "maxResults": 1}],
+            }
+        ]
+    }
+    url = _GOOGLE_VISION_URL.format(key=_GOOGLE_VISION_API_KEY)
+    try:
+        logger.info("Calling Google Cloud Vision API (payload=%.1f KB)", len(jpeg_bytes) / 1024)
+        response = requests.post(
+            url,
+            data=json.dumps(request_body),
+            headers={"Content-Type": "application/json"},
+            timeout=_API_TIMEOUT,
+        )
+        response.raise_for_status()
+    except requests.exceptions.Timeout:
+        raise OCRProcessingError("Google Vision API request timed out.")
+    except requests.exceptions.ConnectionError as exc:
+        raise OCRProcessingError("Cannot reach Google Vision API: " + str(exc)) from exc
+    except requests.exceptions.HTTPError as exc:
+        raise OCRProcessingError(
+            "Google Vision API returned HTTP " + str(response.status_code) + "."
+        ) from exc
+    try:
+        data = response.json()
+    except ValueError as exc:
+        raise OCRProcessingError("Google Vision returned an invalid JSON response.") from exc
+    responses = data.get("responses", [{}])
+    if not responses:
+        raise OCRProcessingError("Google Vision returned an empty response list.")
+    first = responses[0]
+    if "error" in first:
+        code = first["error"].get("code", "?")
+        msg = first["error"].get("message", "Unknown error")
+        raise OCRProcessingError("Google Vision API error " + str(code) + ": " + msg)
+    full_annotation = first.get("fullTextAnnotation", {})
+    extracted = full_annotation.get("text", "").strip()
+    logger.info("Google Vision returned %d characters", len(extracted))
+    return extracted
 
-    # Detect if extracted text contains Devanagari/Hindi characters
-    has_devanagari = bool(re.search(r"[\u0900-\u097F]", final_text))
+
+def _detect_language(text: str) -> Tuple[str, str]:
+    has_devanagari = bool(re.search(r"[\u0900-\u097F]", text))
     if has_devanagari:
-        lang_code = "hi"
-        lang_name = "Hindi"
-    else:
-        lang_code = "en"
-        lang_name = "English"
-
-    return final_text, avg_conf, lang_code, lang_name
+        return "hi", "Hindi"
+    return "en", "English"
 
 
 def extract_text(file_bytes: bytes, filename: str) -> OCRResult:
     """
-    Extract text from an image using lightweight Tesseract OCR (supporting English and Hindi).
-    Guarantees low memory usage (< 50MB RAM).
+    Extract text from an image using cloud-based OCR.
+
+    Provider order:
+      1. Google Cloud Vision (if GOOGLE_CLOUD_VISION_API_KEY is set)
+      2. OCR.Space (always available; uses helloworld key by default)
+
+    No system packages, no Tesseract binary, no Docker required.
+    Works on any standard Python Render deployment.
+
+    Raises OCRProcessingError on failure.
     """
     if not file_bytes:
         raise OCRProcessingError("The uploaded image is empty.")
 
-    # 1. Verify Tesseract installation
-    if not _check_tesseract_availability():
-        logger.error("Tesseract OCR binary check failed.")
-        raise OCRProcessingError(
-            "Tesseract OCR engine is not installed or available on the server."
-        )
-
-    # 2. Load image using Pillow
     try:
         image = Image.open(io.BytesIO(file_bytes))
         image.load()
     except Exception as exc:
         logger.exception("Failed to open image bytes for %s", filename)
-        raise OCRProcessingError("The uploaded file is not a valid or readable image.") from exc
+        raise OCRProcessingError(
+            "The uploaded file is not a valid or readable image."
+        ) from exc
 
-    width, height = image.size
-    logger.info("Starting Tesseract OCR preprocessing for %s (%dx%d)", filename, width, height)
+    original_width, original_height = image.size
+    logger.info(
+        "Starting cloud OCR preprocessing for %s (%dx%d)",
+        filename, original_width, original_height,
+    )
 
-    # 3. Preprocess image safely
     try:
-        processed_image = _preprocess(image)
+        processed = _preprocess(image)
     except Exception as exc:
         logger.exception("Image preprocessing failed for %s", filename)
         raise OCRProcessingError("Failed to preprocess image for OCR.") from exc
 
-    # 4. Execute Tesseract OCR
-    extracted_text, confidence, lang_code, lang_name = _run_tesseract(processed_image)
+    try:
+        jpeg_bytes = _image_to_jpeg_bytes(processed)
+        jpeg_bytes = _shrink_if_needed(jpeg_bytes)
+    except Exception as exc:
+        logger.exception("JPEG encoding failed for %s", filename)
+        raise OCRProcessingError("Failed to encode image for OCR submission.") from exc
 
-    # Check if text contains English alphanumeric OR Hindi Devanagari characters
-    has_valid_chars = bool(re.search(r"[a-zA-Z0-9\u0900-\u097F]", extracted_text))
+    extracted_text: Optional[str] = None
+    last_error: Optional[str] = None
 
-    if not extracted_text or not has_valid_chars:
-        logger.warning("No readable English or Hindi text found in image %s using Tesseract OCR", filename)
+    if _GOOGLE_VISION_API_KEY:
+        try:
+            extracted_text = _ocr_via_google_vision(jpeg_bytes)
+            logger.info("Google Cloud Vision OCR succeeded for %s", filename)
+        except OCRProcessingError as exc:
+            last_error = str(exc)
+            logger.warning(
+                "Google Vision OCR failed for %s, falling back to OCR.Space: %s",
+                filename, last_error,
+            )
+
+    if extracted_text is None:
+        try:
+            extracted_text = _ocr_via_ocrspace(jpeg_bytes)
+            logger.info("OCR.Space OCR succeeded for %s", filename)
+        except OCRProcessingError as exc:
+            last_error = str(exc)
+            logger.error("OCR.Space OCR also failed for %s: %s", filename, last_error)
+
+    if not extracted_text:
         raise OCRProcessingError(
-            "No readable text was found in this screenshot. Please upload a clear screenshot containing legible English or Hindi text."
+            ("OCR failed for this image. Details: " + last_error)
+            if last_error
+            else "No text was returned by the OCR service for this image."
         )
 
+    lines = [line.strip() for line in extracted_text.splitlines() if line.strip()]
+    final_text = "\n".join(lines).strip()
+
+    has_valid_chars = bool(re.search(r"[a-zA-Z0-9\u0900-\u097F]", final_text))
+    if not final_text or not has_valid_chars:
+        raise OCRProcessingError(
+            "No readable text was found in this screenshot. "
+            "Please upload a clear screenshot containing legible English or Hindi text."
+        )
+
+    lang_code, lang_name = _detect_language(final_text)
+    confidence = round(min(1.0, 0.92 if len(final_text) > 20 else 0.75), 3)
+
     logger.info(
-        "Tesseract OCR successfully extracted %d characters from %s (lang: %s, confidence: %.2f)",
-        len(extracted_text),
-        filename,
-        lang_name,
-        confidence,
+        "Cloud OCR successfully extracted %d characters from %s (lang=%s, confidence=%.2f)",
+        len(final_text), filename, lang_name, confidence,
     )
 
     return OCRResult(
-        extracted_text=extracted_text,
+        extracted_text=final_text,
         confidence=confidence,
         filename=filename,
-        width=width,
-        height=height,
+        width=original_width,
+        height=original_height,
         detected_language=lang_code,
         detected_language_name=lang_name,
     )

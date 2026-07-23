@@ -41,23 +41,27 @@ app.add_middleware(
 @app.on_event("startup")
 def on_startup() -> None:
     import logging
-    import shutil
-    import pytesseract
+    import os
 
     logger = logging.getLogger("app.main")
     init_db()
 
-    # Check and log Tesseract path/version
-    tesseract_path = shutil.which("tesseract")
-    logger.info("Tesseract binary path on startup: %s", tesseract_path)
-    if tesseract_path:
-        try:
-            version = pytesseract.get_tesseract_version()
-            logger.info("Tesseract version detected on startup: %s", version)
-        except Exception as exc:
-            logger.warning("Found Tesseract binary but failed to get version: %s", exc)
+    # Log which cloud OCR providers are configured
+    vision_key = os.environ.get("GOOGLE_CLOUD_VISION_API_KEY")
+    ocr_space_key = os.environ.get("OCR_SPACE_API_KEY", "helloworld")
+
+    if vision_key:
+        logger.info("Cloud OCR: Google Cloud Vision API key is configured (preferred provider).")
     else:
-        logger.error("Tesseract binary NOT found on startup PATH.")
+        logger.info("Cloud OCR: Google Cloud Vision API key NOT set — OCR.Space will be used.")
+
+    if ocr_space_key == "helloworld":
+        logger.warning(
+            "Cloud OCR: Using OCR.Space demo key (helloworld). "
+            "Rate limit is 25 req/hour. Set OCR_SPACE_API_KEY for production."
+        )
+    else:
+        logger.info("Cloud OCR: OCR.Space custom API key is configured.")
 
 
 @app.exception_handler(FraudShieldError)

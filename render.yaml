@@ -3,7 +3,14 @@ services:
     name: citizen-fraud-shield-api
     env: python
     rootDir: backend
-    buildCommand: |
-      apt-get update && apt-get install -y tesseract-ocr
-      pip install --no-cache-dir -r requirements.txt
+    buildCommand: pip install --no-cache-dir -r requirements.txt
     startCommand: python run.py
+    envVars:
+      # OCR.Space API key — free at https://ocr.space/ocrapi (25,000 req/month)
+      # Leave unset to use the demo "helloworld" key (25 req/hour, testing only)
+      - key: OCR_SPACE_API_KEY
+        sync: false
+      # (Optional) Google Cloud Vision API key for higher-quality OCR
+      # If set, Vision is used as primary and OCR.Space becomes the fallback
+      - key: GOOGLE_CLOUD_VISION_API_KEY
+        sync: false
